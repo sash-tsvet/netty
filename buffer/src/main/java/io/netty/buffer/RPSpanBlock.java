@@ -9,4 +9,10 @@ public class RPSpanBlock {
     int    first_autolink;
     //! Free count
     int    free_count;
+
+    public RPSpanBlock() {
+        free_list = 0;
+        free_count = 0;
+        first_autolink = 0;
+    }
 }

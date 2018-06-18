@@ -127,8 +127,8 @@ public class RPByteBufAllocator  extends AbstractByteBufAllocator implements Byt
     public static final RPByteBufAllocator DEFAULT =
             new RPByteBufAllocator(PlatformDependent.directBufferPreferred());
 
-    private final RPThreadHeap <byte[]> heapHeap = new RPThreadHeap.RPHeapHeap();
-    private final RPThreadHeap <ByteBuffer> directHeap = new RPThreadHeap.RPDirectHeap();
+    private final RPThreadHeap <byte[]> heapHeap = new RPThreadHeap.RPHeapHeap(this);
+    private final RPThreadHeap <ByteBuffer> directHeap = new RPThreadHeap.RPDirectHeap(this);
 
 //    private final PoolArena<byte[]>[] heapArenas;
 //    private final PoolArena<ByteBuffer>[] directArenas;

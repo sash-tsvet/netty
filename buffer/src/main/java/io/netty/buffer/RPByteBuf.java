@@ -25,24 +25,21 @@ abstract class RPByteBuf<T> extends AbstractReferenceCountedByteBuf {
         this.recyclerHandle = (Handle<RPByteBuf<T>>) recyclerHandle;
     }
 
-//    void init(PoolChunk<T> chunk, long handle, int offset, int length, int maxLength, PoolThreadCache cache) {
-//        init0(chunk, handle, offset, length, maxLength, cache);
-//    }
-//
-//    void initUnpooled(PoolChunk<T> chunk, int length) {
-//        init0(chunk, 0, chunk.offset, length, length, null);
-//    }
+    void initUnpooled(RPSpan<T> span, int length, int maxLength) {
+        init0(span, 0, length, maxLength);
+    }
 
-    private void init0(RPSpan<T> span, long handle, int offset, int length, int maxLength){//}, PoolThreadCache cache) {
+    private void init0(RPSpan<T> span, long handle, int length, int maxLength){//}, PoolThreadCache cache) {
         assert handle >= 0;
         assert span != null;
 
         this.span = span;
         memory = span.memory;
-//        allocator = span.arena.parent;
+        RPThreadHeap heap = span.heap;
+        allocator = heap.parent;
 //        this.cache = cache;
         this.handle = handle;
-        this.offset = offset;
+        this.offset = span.data.block.free_list*span.size_class;
         this.length = length;
         this.maxLength = maxLength;
         tmpNioBuf = null;
@@ -70,32 +67,32 @@ abstract class RPByteBuf<T> extends AbstractReferenceCountedByteBuf {
 //                return this;
 //            }
 //        } else {
-//            if (newCapacity > length) {
-//                if (newCapacity <= maxLength) {
-//                    length = newCapacity;
-//                    return this;
-//                }
-//            } else if (newCapacity < length) {
-//                if (newCapacity > maxLength >>> 1) {
-//                    if (maxLength <= 512) {
-//                        if (newCapacity > maxLength - 16) {
-//                            length = newCapacity;
-//                            setIndex(Math.min(readerIndex(), newCapacity), Math.min(writerIndex(), newCapacity));
-//                            return this;
-//                        }
-//                    } else { // > 512 (i.e. >= 1024)
-//                        length = newCapacity;
-//                        setIndex(Math.min(readerIndex(), newCapacity), Math.min(writerIndex(), newCapacity));
-//                        return this;
-//                    }
-//                }
-//            } else {
-//                return this;
-//            }
+            if (newCapacity > length) {
+                if (newCapacity <= maxLength) {
+                    length = newCapacity;
+                    return this;
+                }
+            } else if (newCapacity < length) {
+                if (newCapacity > maxLength >>> 1) {
+                    if (maxLength <= 512) {
+                        if (newCapacity > maxLength - 16) {
+                            length = newCapacity;
+                            setIndex(Math.min(readerIndex(), newCapacity), Math.min(writerIndex(), newCapacity));
+                            return this;
+                        }
+                    } else { // > 512 (i.e. >= 1024)
+                        length = newCapacity;
+                        setIndex(Math.min(readerIndex(), newCapacity), Math.min(writerIndex(), newCapacity));
+                        return this;
+                    }
+                }
+            } else {
+                return this;
+            }
 //        }
 //
-//        // Reallocation required.
-//        chunk.arena.reallocate(this, newCapacity, true);
+        // Reallocation required.
+//        span.heap.reallocate(this, newCapacity, true);///!!!!
         return this;
     }
 

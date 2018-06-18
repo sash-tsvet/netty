@@ -1,5 +1,7 @@
 package io.netty.buffer;
 
+import io.netty.util.internal.PlatformDependent;
+
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
@@ -12,13 +14,15 @@ public class RPSpanList {
     private static int _memory_span_size;
     //! Memory page size
     private static int _memory_page_size;
+    RPThreadHeap heap;
 
-    RPSpanList(int size, int _memory_page_size, int _memory_span_size) {
+    RPSpanList(int size, int _memory_page_size, int _memory_span_size, RPThreadHeap heap) {
         this.list = new LinkedList<RPSpan>();
         this._memory_span_size = _memory_span_size;
         this._memory_page_size = _memory_page_size;
+        this.heap = heap;
         for (int i = 0; i < size ; i++) {
-            list.add(new RPSpan(null, null, null, _memory_page_size,  _memory_span_size));
+            list.add(new RPSpan(heap, PlatformDependent.allocateUninitializedArray(_memory_span_size), null, _memory_page_size,  _memory_span_size));
         }
     }
     //! Unmap a single linked list of spans
@@ -53,7 +57,7 @@ public class RPSpanList {
     //! Split a single linked span list
     RPSpanList
     _memory_span_list_split(int limit) {
-        RPSpanList next = new RPSpanList(0, _memory_page_size,  _memory_span_size );
+        RPSpanList next = new RPSpanList(0, _memory_page_size,  _memory_span_size, this.heap);
         if (limit < 2)
             limit = 2;
 

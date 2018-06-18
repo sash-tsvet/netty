@@ -21,7 +21,7 @@ public class RPThreadHeap<T> {
     private static final int LARGE_CLASS_COUNT = 32;
 
     //! Size of a span of memory pages
-    private static final int _memory_medium_size_limit = 4095;
+    private static final int _memory_medium_size_limit = 4096;
     private static final int _memory_page_size = 4096;
     private static final int LARGE_SIZE_LIMIT = 32*4096;
     private static final int SMALL_SIZE_LIMIT = 32*63;
@@ -40,7 +40,7 @@ public class RPThreadHeap<T> {
     //! Free count for each size class active span
     RPSpanBlock[] active_block;//[SIZE_CLASS_COUNT];
     //! Active span for each size class
-    ArrayList<RPSpan> active_span;//[SIZE_CLASS_COUNT];
+    RPSpan[] active_span;//[SIZE_CLASS_COUNT];
     //! List of semi-used spans with free blocks for each size class (double linked list)
     RPSpanList[]      size_cache;//[SIZE_CLASS_COUNT];
     //! List of free spans (single linked list)
@@ -65,22 +65,82 @@ public class RPThreadHeap<T> {
 //    long       global_to_thread;
     //! Global size classes
     RPSizeClass[] _memory_size_class;//[SIZE_CLASS_COUNT]
+    final RPByteBufAllocator parent;
+
+    RPSpanList fullSpanList;
+
+    public RPThreadHeap (RPByteBufAllocator parent) {
+        _memory_size_class = new RPSizeClass[SIZE_CLASS_COUNT];
+        for (int i = 0; i < SIZE_CLASS_COUNT; i++) {
+            RPSizeClass someObject = new RPSizeClass();
+            // set properties
+            _memory_size_class[i] = someObject;
+        }
+        for (int iclass = 0; iclass < SMALL_CLASS_COUNT; ++iclass) {
+            int size = (iclass + 1) * SMALL_GRANULARITY;
+            _memory_size_class[iclass].size = size;
+            _memory_adjust_size_class(iclass);
+        }
+
+        for (int iclass = 0; iclass < MEDIUM_CLASS_COUNT; ++iclass) {
+            int size = SMALL_SIZE_LIMIT + ((iclass + 1) * MEDIUM_GRANULARITY);
+            if (size > _memory_medium_size_limit)
+                size = _memory_medium_size_limit;
+            _memory_size_class[SMALL_CLASS_COUNT + iclass].size = size;
+            _memory_adjust_size_class(SMALL_CLASS_COUNT + iclass);
+        }
+
+        active_block = new RPSpanBlock[SIZE_CLASS_COUNT];
+        for (int i = 0; i < SIZE_CLASS_COUNT; i++) {
+            RPSpanBlock someObject = new RPSpanBlock();
+            // set properties
+            active_block[i] = someObject;
+        }
+        //this part of code is working, but it is not used in tests
+//        size_cache = new RPSpanList[SIZE_CLASS_COUNT];
+
+        span_cache = new RPSpanList[LARGE_CLASS_COUNT];
+        active_span = new RPSpan[SIZE_CLASS_COUNT];
+        this.parent = parent;
+        this.fullSpanList = new RPSpanList(0, 100, 200,this);
+    }
 
 
+    void
+    _memory_adjust_size_class(int iclass) {
+        int block_size = _memory_size_class[iclass].size;
+        int block_count = (_memory_span_size) / block_size;
+
+        _memory_size_class[iclass].block_count = block_count;
+        _memory_size_class[iclass].class_idx = iclass;
+
+        //Check if previous size classes can be merged
+        int prevclass = iclass;
+        while (prevclass > 0) {
+            --prevclass;
+            //A class can be merged if number of pages and number of blocks are equal
+            if (_memory_size_class[prevclass].block_count == _memory_size_class[iclass].block_count) {
+                _memory_size_class[prevclass] = _memory_size_class[iclass];
+            }
+            else {
+                break;
+            }
+        }
+    }
 
     //! Map in memory pages for the given number of spans (or use previously reserved pages)
     RPSpan
     _memory_map_spans(int span_count) {
         if (span_count <= this.spans_reserved) {
             RPSpan span = this.span_reserve;
-            this.span_reserve =  (RPSpan) this.span_reserve.list.get(this.span_reserve.list.indexOf(span) + span_count);
+            this.span_reserve =  this.fullSpanList.list.get(span_count) ;//(RPSpan) this.span_reserve.list.list.get(this.span_reserve.list.list.indexOf(span) + span_count);
             this.spans_reserved -= span_count;
             if (span == this.span_reserve_master) {
                 assert((span.flags & RPSpan.SPAN_FLAG_MASTER) != 0);
             }
             else {
                 //Declare the span to be a subspan with given distance from master span
-                int distance = this.span_reserve.list.indexOf(span) - this.span_reserve.list.indexOf(this.span_reserve_master);
+                int distance = this.fullSpanList.list.indexOf(span) - this.fullSpanList.list.indexOf(this.span_reserve_master);
                 span.flags = SPAN_FLAG_SUBSPAN;
                 span.total_spans_or_distance = distance;
                 span.align_offset = 0;
@@ -95,12 +155,13 @@ public class RPThreadHeap<T> {
 //        if ((_memory_page_size > _memory_span_size) && ((request_spans * _memory_span_size) % _memory_page_size) != 0)
 //            request_spans += _memory_span_map_count - (request_spans % _memory_span_map_count);
         int align_offset = 0;
-        RPSpanList spanList = new RPSpanList(request_spans, 100, 200);//!!!!!!!!!!!!
+        RPSpanList spanList = new RPSpanList(request_spans, 100, 200, this);//!!!!!!!!!!!!
         spanList.list.getFirst().align_offset = align_offset;
         spanList.list.getFirst().total_spans_or_distance = request_spans;
         spanList.list.getFirst().span_count = span_count;
         spanList.list.getFirst().flags = RPSpan.SPAN_FLAG_MASTER;
         spanList.list.getFirst().remaining_spans = new AtomicInteger(request_spans);
+        fullSpanList.list.addAll(spanList.list);
 //        _memory_statistics_add(&_reserved_spans, request_spans);
         if (request_spans > span_count) {
             if (this.spans_reserved != 0) {
@@ -109,7 +170,7 @@ public class RPThreadHeap<T> {
                     assert((prev_span.flags & RPSpan.SPAN_FLAG_MASTER) != 0);
                 }
                 else {
-                    int distance = this.span_reserve.list.indexOf(spanList.list.getFirst()) - this.span_reserve.list.indexOf(this.span_reserve_master);
+                    int distance = this.fullSpanList.list.indexOf(spanList.list.getFirst()) - this.fullSpanList.list.indexOf(this.span_reserve_master);
                     prev_span.flags = SPAN_FLAG_SUBSPAN;
                     prev_span.total_spans_or_distance = distance;
                     prev_span.align_offset = 0;
@@ -119,7 +180,7 @@ public class RPThreadHeap<T> {
                 _memory_heap_cache_insert(prev_span);
             }
             this.span_reserve_master = spanList.list.getFirst();
-            this.span_reserve = (RPSpan) this.span_reserve.list.get(this.span_reserve.list.indexOf(spanList.list.getFirst()) + span_count);
+            this.span_reserve = this.fullSpanList.list.get(span_count);//(RPSpan) this.span_reserve.list.get(this.span_reserve.list.indexOf(spanList.list.getFirst()) + span_count);
             this.spans_reserved = request_spans - span_count;
         }
         return spanList.list.getFirst();
@@ -166,7 +227,7 @@ public class RPThreadHeap<T> {
             if (this.spans_reserved == 0) {
                 this.spans_reserved = got_count - span_count;
                 this.span_reserve = subspan;
-                this.span_reserve_master = (RPSpan) subspan.list.get(0);
+                this.span_reserve_master = (RPSpan) subspan.list.list.get(0);
             }
             else {
                 _memory_heap_cache_insert(subspan);
@@ -190,11 +251,11 @@ void
 	 int base_idx = (size <= SMALL_SIZE_LIMIT) ?
                 ((size + (SMALL_GRANULARITY - 1)) >> SMALL_GRANULARITY_SHIFT) :
                 SMALL_CLASS_COUNT + ((size - SMALL_SIZE_LIMIT + (MEDIUM_GRANULARITY - 1)) >> MEDIUM_GRANULARITY_SHIFT);
-        assert((base_idx != 0) || ((base_idx - 1) < SIZE_CLASS_COUNT));
+     assert((base_idx != 0) || ((base_idx - 1) < SIZE_CLASS_COUNT));
 	 int class_idx = _memory_size_class[base_idx == 0 ? (base_idx - 1) : 0].class_idx;
 
-        RPSpanBlock active_block = this.active_block[class_idx];
-        RPSizeClass size_class = _memory_size_class[class_idx];
+     RPSpanBlock active_block = this.active_block[class_idx];
+     RPSizeClass size_class = _memory_size_class[class_idx];
 	 int class_size = size_class.size;
 
         //Step 1: Try to get a block from the currently active span. The span block bookkeeping
@@ -204,7 +265,7 @@ void
             for (int j = 0; j <1; j++) {
                 if (active_block.free_count != 0) {
                     //Happy path, we have a span with at least one free block
-                    RPSpan span = this.active_span.get(class_idx);
+                    RPSpan span = this.active_span[class_idx];
                     int offset = class_size * active_block.free_list;
                     assert (span != null && (span.heap_id == this.id));
 
@@ -213,7 +274,7 @@ void
                         //span itself and reset the active span pointer in the heap
                         span.data.block.free_count = active_block.free_count = 0;
                         span.data.block.first_autolink = 0xFFFF;
-                        this.active_span.set(class_idx, span);// = (RPSpan) null;
+                        this.active_span[class_idx] = span;//);// = (RPSpan) null;
                     } else {
                         //Get the next free block, either from linked list or from auto link
                         ++active_block.free_list;
@@ -223,6 +284,7 @@ void
                         --active_block.free_count;
                     }
                     buf.handle = offset;
+                    buf.initUnpooled(span,size,_memory_medium_size_limit);
                     return;
                 }
 
@@ -231,22 +293,23 @@ void
                 _memory_deallocate_deferred();
 
                 //Step 3: Check if there is a semi-used span of the requested size class available
-                if (this.size_cache[class_idx] != null) {
-                    //Promote a pending semi-used span to be active, storing bookkeeping data in
-                    //the heap structure for faster access
-                    RPSpanList spanlist = this.size_cache[class_idx];
-                    RPSpan span = spanlist.list.getFirst();
-                    //Mark span as owned by this heap
-                    span.heap_id = this.id;
-//            atomic_thread_fence_release();
-
-                    active_block = span.data.block;
-                    assert (active_block.free_count > 0);
-                    this.size_cache[class_idx] = spanlist;
-                    this.active_span.set(class_idx, span);
-
-                    continue use_active;
-                }
+                //this part of code is working, but it is not used in tests
+//                if (this.size_cache[class_idx] != null) {
+//                    //Promote a pending semi-used span to be active, storing bookkeeping data in
+//                    //the heap structure for faster access
+//                    RPSpanList spanlist = this.size_cache[class_idx];
+//                    RPSpan span = spanlist.list.getFirst();
+//                    //Mark span as owned by this heap
+//                    span.heap_id = this.id;
+////            atomic_thread_fence_release();
+//
+//                    active_block = span.data.block;
+//                    assert (active_block.free_count > 0);
+//                    this.size_cache[class_idx] = spanlist;
+//                    this.active_span[class_idx] = span;//);
+//
+//                    continue use_active;
+//                }
             }
         }
 
@@ -270,13 +333,14 @@ void
             active_block.free_count = (size_class.block_count - 1);
             active_block.free_list = 1;
             active_block.first_autolink = 1;
-            this.active_span.set(class_idx, span);
+            this.active_span[class_idx] = span;//);
         }
         else {
             span.data.block.free_count = 0;
             span.data.block.first_autolink = 0xFFFF;
         }
 
+        buf.initUnpooled(span,size,_memory_medium_size_limit);
         //Return first block if memory page span
 //        return pointer_offset(span, SPAN_HEADER_SIZE);
     }
@@ -303,6 +367,7 @@ void
         assert(span.span_count == span_count);
         span.size_class = SIZE_CLASS_COUNT + idx;
         span.heap_id = this.id;
+        buf.initUnpooled(span,size,LARGE_SIZE_LIMIT);
 //        atomic_thread_fence_release();
 
 //        return pointer_offset(span, SPAN_HEADER_SIZE);
@@ -364,7 +429,7 @@ void
         assert(span.span_count == 1);
 	    int class_idx = span.size_class;
         RPSizeClass size_class = _memory_size_class[class_idx];
-        boolean is_active = (this.active_span.get(class_idx) == span);
+        boolean is_active = (this.active_span[class_idx] == span);
         RPSpanBlock block_data = is_active ?
                 this.active_block[class_idx] :
 	                           span.data.block;
@@ -417,7 +482,7 @@ void
                 this.span_reserve_master = span;
             }
             else { //SPAN_FLAG_SUBSPAN
-                RPSpan master = (RPSpan) span.list.get(0);
+                RPSpan master = (RPSpan) span.list.list.get(0);
                 this.span_reserve_master = master;
                 assert((master.flags & RPSpan.SPAN_FLAG_MASTER) != 0);
 //                assert(master.remaining_spans >= span.span_count);
@@ -477,7 +542,7 @@ void
         if ((size & (_memory_page_size - 1)) != 0)
             ++num_pages;
         int align_offset = 0;
-        RPSpan span = new RPSpan(this, null, null, _memory_page_size, _memory_span_size);// _memory_map(num_pages * _memory_page_size, &align_offset);
+        RPSpan span = new RPSpan(this, PlatformDependent.allocateUninitializedArray(size), span_cache[size], _memory_page_size, _memory_span_size);// _memory_map(num_pages * _memory_page_size, &align_offset);
         span.heap_id = new AtomicInteger(0);
         //Store page count in span_count
         span.span_count = num_pages;
@@ -527,7 +592,7 @@ void
                     //Small/medium sized block
                     assert(span.span_count == 1);
                     RPSizeClass size_class = _memory_size_class[span.size_class];
-                    int block_offset = span.list.indexOf(p);
+                    int block_offset = span.list.list.indexOf(p);
                     int block_idx = block_offset / size_class.size;
 //				    void* block = pointer_offset(blocks_start, block_idx * size_class.size);
                     if (size_class.size >= size)
@@ -546,7 +611,7 @@ void
                     if ((current_spans >= num_spans) && (num_spans >= (current_spans / 2)))
                         return; //Still fits and less than half of memory would be freed
                     if (oldsize == 0)
-                        oldsize = (current_spans * _memory_span_size) - span.list.indexOf(p);
+                        oldsize = (current_spans * _memory_span_size) - span.list.list.indexOf(p);
                 }
             }
             else {
@@ -561,7 +626,7 @@ void
                 if ((current_pages >= num_pages) && (num_pages >= (current_pages / 2)))
                     return; //Still fits and less than half of memory would be freed
                 if (oldsize == 0)
-                    oldsize = (current_pages * _memory_page_size) - span.list.indexOf(p);
+                    oldsize = (current_pages * _memory_page_size) - span.list.list.indexOf(p);
             }
         }
 
@@ -594,12 +659,12 @@ void
 
             //Large block
             int current_spans = (span.size_class - SIZE_CLASS_COUNT) + 1;
-            return (current_spans * _memory_span_size) - span.list.indexOf(p);
+            return (current_spans * _memory_span_size) - span.list.list.indexOf(p);
         }
 
         //Oversized block, page count is stored in span_count
         int current_pages = span.span_count;
-        return (current_pages * _memory_page_size) - span.list.indexOf(p);
+        return (current_pages * _memory_page_size) - span.list.list.indexOf(p);
     }
 
 //    //! Adjust and optimize the size class properties for the given class
@@ -636,6 +701,9 @@ void
     }
 
     static final class RPHeapHeap extends RPThreadHeap<byte[]> {
+        public RPHeapHeap(RPByteBufAllocator parent) {
+            super(parent);
+        }
 
 //        HeapArena(PooledByteBufAllocator parent, int pageSize, int maxOrder,
 //                  int pageShifts, int chunkSize, int directMemoryCacheAlignment) {
@@ -668,6 +736,9 @@ void
     }
 
     static final class RPDirectHeap extends RPThreadHeap<ByteBuffer> {
+        public RPDirectHeap(RPByteBufAllocator parent) {
+            super(parent);
+        }
 
 //        DirectArena(PooledByteBufAllocator parent, int pageSize, int maxOrder,
 //                    int pageShifts, int chunkSize, int directMemoryCacheAlignment) {

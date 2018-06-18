@@ -32,7 +32,7 @@ public class RPSpan<T> {
     //! Alignment offset
     int    align_offset;
 
-    ArrayList<RPSpan> list;
+    RPSpanList list;
     final T memory;
 
 
@@ -45,10 +45,11 @@ public class RPSpan<T> {
     //! Memory page size
     private static int _memory_page_size;
 
-    RPSpan(RPThreadHeap<T> heap, T memory, ArrayList<RPSpan> list, int _memory_page_size, int _memory_span_size) {
+    RPSpan(RPThreadHeap<T> heap, T memory, RPSpanList list, int _memory_page_size, int _memory_span_size) {
         this.list = list;
         this.heap = heap;
         this.memory = memory;
+        this.data = new RPSpanData();
         this._memory_span_size = _memory_span_size;
         this._memory_page_size = _memory_page_size;
     }
@@ -61,7 +62,7 @@ public class RPSpan<T> {
         assert((this.flags & SPAN_FLAG_MASTER) != 0 || (this.flags & SPAN_FLAG_SUBSPAN) != 0);
 
         boolean is_master = ((this.flags & SPAN_FLAG_MASTER) == 0);
-        RPSpan master = is_master ? this : this.list.get(0);
+        RPSpan master = is_master ? this : this.list.list.get(0);
 
         assert(is_master || (this.flags & SPAN_FLAG_SUBSPAN) != 0); // Is master or subspan
         assert((master.flags & SPAN_FLAG_MASTER) != 0); // Master is valid
@@ -104,7 +105,7 @@ public class RPSpan<T> {
             distance = this.total_spans_or_distance;
 
         //Setup remainder as a subspan
-        RPSpan subspan = this.list.get(use_count);
+        RPSpan subspan = this.list.list.get(use_count);
         subspan.flags = SPAN_FLAG_SUBSPAN;
         subspan.total_spans_or_distance = distance + use_count;
         subspan.span_count = current_count - use_count;

@@ -5,4 +5,9 @@ public class RPSpanData {
     RPSpanBlock block;
     //! Span data when used in lists
     int listSize;
+
+    public RPSpanData() {
+        block = new RPSpanBlock();
+        listSize = 0;
+    }
 }
